@@ -104,12 +104,12 @@ mpiexec -n 4 python master_node/master_node.py
 
 ## 👨‍💻 Team Members
 
-| Name     | Role                  | OS        |
-|----------|-----------------------|-----------|
-| Ahmed    | Project Architect     | macOS     |
-| Sara     | Crawler Development   | Windows   |
-| Youssef  | Cloud Infrastructure  | Windows   |
-| Fatma    | Indexer & QA Lead     | Windows   |
+| Name                           | Role                                         |
+|--------------------------------|----------------------------------------------|
+| Ahmed Ehab Mohamed El-Baramony | Crawler Lead , Tester/Documentation Lead     |
+| Ahmed Mohamed Mohamed          | Architect                                    |
+| Ahmed Mohamed El-Henawy        | Cloud Infrastructure Lead                    |
+| Mohamed Hassan                 | Indexer                                      |
 
 ---
 
