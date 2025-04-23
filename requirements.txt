@@ -1,0 +1,6 @@
+mpi4py
+requests
+beautifulsoup4
+whoosh
+google-cloud-storage
+boto3
