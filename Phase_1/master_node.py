@@ -4,86 +4,93 @@ from mpi4py import MPI
 import time
 import logging
 
-# Configure logging format
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - Master - %(levelname)s - %(message)s')
+# Setup organized logging
+def setup_logger(role, rank):
+    logger = logging.getLogger(f"{role}-{rank}")
+    formatter = logging.Formatter('%(asctime)s | %(name)s | %(levelname)s | %(message)s')
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+    logger.setLevel(logging.INFO)
+    logger.addHandler(handler)
+    return logger
 
-CRAWL_DELAY = 0.1  # Delay between task assignments
+CRAWL_DELAY = 0.1
+MAX_CRAWL_DEPTH = 2
 
 def master_process():
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     size = comm.Get_size()
+    logger = setup_logger("Master", rank)
     status = MPI.Status()
 
-    logging.info(f"Master node started with rank {rank} of {size}")
-
-    if size < 3:
-        logging.error("At least 3 processes are required: Master, Crawler(s), and Indexer.")
+    # Master is the only node that can rank 0
+    if rank != 0:
         return
 
-    crawler_ranks = list(range(1, size - 1))  # Crawlers = rank 1 to (size-2)
-    indexer_rank = size - 1                   # Indexer = last rank
+    logger.info(f"Master node started with rank {rank} of {size}")
 
-    # Seed URLs to start crawling
+    if size < 3:
+        logger.error("At least 3 processes are required: Master, Crawler(s), and Indexer.")
+        return
+
+    crawler_ranks = list(range(1, size - 1))
+    indexer_rank = size - 1
+
     seed_urls = [
-        "https://quotes.toscrape.com/",
-        "https://quotes.toscrape.com/page/1/",
-        "https://quotes.toscrape.com/page/2/"
+        ("https://demo.cyotek.com/", 0)
     ]
     urls_to_crawl_queue = list(seed_urls)
-    crawled_urls_set = set()
-
-    # Track which crawlers are busy
+    crawled_urls_set = set() # To avoid duplicate URLs
     busy_crawlers = {crawler: False for crawler in crawler_ranks}
 
-    logging.info("Starting task distribution...")
+    logger.info("Starting task distribution...")
 
     while urls_to_crawl_queue or any(busy_crawlers.values()):
-        # Assign URLs to idle crawlers
         for crawler in crawler_ranks:
             if not busy_crawlers[crawler] and urls_to_crawl_queue:
-                url = urls_to_crawl_queue.pop(0)
+                url, depth = urls_to_crawl_queue.pop(0)
                 if url not in crawled_urls_set:
-                    comm.send(url, dest=crawler, tag=0)  # Send URL
+                    comm.send((url, depth), dest=crawler, tag=0)
                     busy_crawlers[crawler] = True
-                    logging.info(f"Assigned URL '{url}' to Crawler {crawler}")
+                    logger.info(f"Assigned URL '{url}' (Depth {depth}) to Crawler {crawler}")
                     time.sleep(CRAWL_DELAY)
 
-        # Handle incoming messages
         if comm.Iprobe(source=MPI.ANY_SOURCE, tag=MPI.ANY_TAG, status=status):
             src = status.Get_source()
             tag = status.Get_tag()
             data = comm.recv(source=src, tag=tag)
 
             if tag == 1:
-                # Crawler sent new URLs
-                logging.info(f"Received {len(data)} new URLs from Crawler {src}")
-                for new_url in data:
-                    if new_url not in crawled_urls_set and new_url not in urls_to_crawl_queue:
-                        urls_to_crawl_queue.append(new_url)
+                original_url, original_depth = data['source_url'], data['source_depth']
+                new_urls = data['new_urls']
+                logger.info(f"Received {len(new_urls)} new URLs from Crawler {src} (from {original_url})")
+
+                if original_depth + 1 <= MAX_CRAWL_DEPTH:
+                    for new_url in new_urls:
+                        if new_url not in crawled_urls_set and new_url not in [u for u, _ in urls_to_crawl_queue]:
+                            urls_to_crawl_queue.append((new_url, original_depth + 1))
+
                 busy_crawlers[src] = False
 
             elif tag == 99:
-                # Status update (heartbeat)
-                logging.info(f"Status from Crawler {src}: {data}")
+                logger.info(f"Status from Crawler {src}: {data}")
                 busy_crawlers[src] = False
 
             elif tag == 999:
-                # Error reported
-                logging.error(f"Error from Crawler {src}: {data}")
+                logger.error(f"Error from Crawler {src}: {data}")
                 busy_crawlers[src] = False
 
-        time.sleep(0.2)  # Prevent CPU overloading with busy waiting
+        time.sleep(0.2)
 
-    # Crawling completed — Send shutdown signals
-    logging.info("Crawling finished. Sending shutdown signals to Crawlers and Indexer.")
+    logger.info("Crawling finished. Sending shutdown signals to Crawlers and Indexer.")
 
     for crawler in crawler_ranks:
-        comm.send(None, dest=crawler, tag=0)  # Shutdown Crawler
+        comm.send(None, dest=crawler, tag=0)  # Shutdown signal for crawlers
 
-    comm.send(None, dest=indexer_rank, tag=2)  # Shutdown Indexer
+    comm.send(None, dest=indexer_rank, tag=2) # Shutdown signal for indexer
 
-    logging.info("Master node finished operations.")
+    logger.info("Master node finished operations.")
 
 if __name__ == '__main__':
     master_process()

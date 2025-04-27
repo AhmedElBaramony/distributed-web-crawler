@@ -3,48 +3,62 @@
 from mpi4py import MPI
 import time
 import logging
+import csv 
 
-# Configure logging format
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - Indexer - %(levelname)s - %(message)s')
+# Setup organized logging
+def setup_logger(role, rank):
+    logger = logging.getLogger(f"{role}-{rank}")
+    formatter = logging.Formatter('%(asctime)s | %(name)s | %(levelname)s | %(message)s')
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+    logger.setLevel(logging.INFO)
+    logger.addHandler(handler)
+    return logger
+
+index = {}
+
+def add_to_index(url, text):
+    words = text.lower().split()
+    for word in words:
+        if word not in index:
+            index[word] = set()
+        index[word].add(url)
+
+def save_index_to_csv(filename="index.csv"):
+    """Save the index dictionary into a CSV file."""
+    with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(['Word', 'URL'])  # Header
+        for word, urls in index.items():
+            for url in urls:
+                writer.writerow([word, url])
 
 def indexer_process():
-    """
-    Indexer Node:
-    - Receives crawled content from crawler nodes (tag 2)
-    - Simulates basic indexing of received web page text
-    - Sends status or error messages back to Master Node
-    """
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
+    logger = setup_logger("Indexer", rank)
+    status = MPI.Status()
 
-    logging.info(f"Indexer node {rank} started.")
+    logger.info(f"Indexer node {rank} started.")
 
     while True:
-        status = MPI.Status()
         content_package = comm.recv(source=MPI.ANY_SOURCE, tag=2, status=status)
-        source = status.Get_source()
 
         if content_package is None:
-            logging.info("Indexer received shutdown signal. Exiting.")
+            logger.info("Indexer received shutdown signal. Saving index to CSV and exiting.")
+            save_index_to_csv() 
             break
+
         try:
-            url = content_package.get('url')
-            text = content_package.get('text')
+            url = content_package['url']
+            text = content_package['text']
 
-            if url and text:
-                # Simulate indexing delay
-                time.sleep(1)
-
-                logging.info(f"Successfully indexed content from URL: {url}")
-                # Notify Master of success
-                comm.send(f"Indexed content from {url} (from Crawler {source})", dest=0, tag=99)
-
-            else:
-                logging.warning(f"Received incomplete content package from Crawler {source}: {content_package}")
+            add_to_index(url, text)
+            logger.info(f"Indexed page: {url}")
+            logger.info(f"Total keywords indexed: {len(index)}")
 
         except Exception as e:
-            logging.error(f"Error indexing content from Crawler {source}: {e}")
-            comm.send(f"Error indexing content from Crawler {source}: {e}", dest=0, tag=999)
+            logger.error(f"Error indexing content: {e}")
 
 if __name__ == '__main__':
     indexer_process()
