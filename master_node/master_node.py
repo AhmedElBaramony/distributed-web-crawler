@@ -1,19 +1,15 @@
+# master_node.py
 
 from mpi4py import MPI
 import time
 import logging
 
-# Configure logging format
+# Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - Master - %(levelname)s - %(message)s')
 
+CRAWL_DELAY = 0.1  # Small delay to avoid overwhelming message passing
+
 def master_process():
-    """
-    Master Node: Central controller for task scheduling and system monitoring.
-    Responsibilities:
-    - Assign seed URLs to crawler nodes
-    - Monitor crawler and indexer status
-    - Handle errors and requeue failed tasks
-    """
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     size = comm.Get_size()
@@ -21,55 +17,68 @@ def master_process():
 
     logging.info(f"Master node started with rank {rank} of {size}")
 
-    # Assume one indexer node, the rest are crawler nodes
-    crawler_nodes = size - 2
-    indexer_nodes = 1
-
-    if crawler_nodes <= 0 or indexer_nodes <= 0:
-        logging.error("Minimum: 1 master, 1 crawler, 1 indexer required.")
+    # Validate number of processes (Master + at least 1 Crawler + 1 Indexer)
+    if size < 3:
+        logging.error("At least 3 processes are required: Master, Crawler(s), and Indexer.")
         return
 
-    # Define the ranks of worker nodes
-    active_crawlers = list(range(1, 1 + crawler_nodes))
-    active_indexers = list(range(1 + crawler_nodes, size))
+    crawler_ranks = list(range(1, size - 1))  # Crawlers: ranks 1 to (size-2)
+    indexer_rank = size - 1  # Indexer is last rank
 
-    # Seed URLs to kickstart the crawl process
-    seed_urls = ["http://example.com", "http://example.org"]
-    urls_to_crawl_queue = seed_urls[:]
-    task_count = 0
-    assigned_tasks = 0
+    # Initial seed URLs
+    seed_urls = [
+        "http://example.com",
+        "http://www.python.org",
+        "https://www.wikipedia.org"
+    ]
+    urls_to_crawl_queue = list(seed_urls)
+    crawled_urls_set = set()
+    assigned_tasks = {}  # {crawler_rank: url}
 
-    # Main scheduling loop
-    while urls_to_crawl_queue or assigned_tasks > 0:
-        # Handle responses from crawler nodes
-        if assigned_tasks > 0 and comm.iprobe(source=MPI.ANY_SOURCE, tag=MPI.ANY_TAG, status=status):
+    # Main loop
+    while urls_to_crawl_queue or assigned_tasks:
+        # Assign URLs to idle crawlers
+        for crawler in crawler_ranks:
+            if crawler not in assigned_tasks and urls_to_crawl_queue:
+                url = urls_to_crawl_queue.pop(0)
+                if url not in crawled_urls_set:
+                    comm.send(url, dest=crawler, tag=0)  # Send crawl task
+                    assigned_tasks[crawler] = url
+                    logging.info(f"Assigned URL '{url}' to Crawler {crawler}")
+                    time.sleep(CRAWL_DELAY)
+
+        # Handle incoming messages
+        while comm.Iprobe(source=MPI.ANY_SOURCE, tag=MPI.ANY_TAG, status=status):
             source = status.Get_source()
             tag = status.Get_tag()
             data = comm.recv(source=source, tag=tag)
 
-            if tag == 1:  # Received new URLs to crawl
-                assigned_tasks -= 1
-                urls_to_crawl_queue.extend(data)
-                logging.info(f"Received URLs from Crawler {source}, queue size: {len(urls_to_crawl_queue)}")
-            elif tag == 99:  # Heartbeat or status
+            if tag == 1:  # New URLs discovered
+                logging.info(f"Received {len(data)} new URLs from Crawler {source}")
+                for new_url in data:
+                    if new_url not in crawled_urls_set and new_url not in urls_to_crawl_queue:
+                        urls_to_crawl_queue.append(new_url)
+                finished_url = assigned_tasks.pop(source, None)
+                if finished_url:
+                    crawled_urls_set.add(finished_url)
+
+            elif tag == 99:  # Heartbeat/status
                 logging.info(f"Status from Crawler {source}: {data}")
+
             elif tag == 999:  # Error report
-                assigned_tasks -= 1
                 logging.error(f"Error from Crawler {source}: {data}")
+                assigned_tasks.pop(source, None)  # Consider the task failed
 
-        # Assign new tasks to crawler nodes
-        while urls_to_crawl_queue and assigned_tasks < crawler_nodes:
-            url = urls_to_crawl_queue.pop(0)
-            target = active_crawlers[assigned_tasks % len(active_crawlers)]
-            comm.send(url, dest=target, tag=0)  # Tag 0 = crawl task
-            logging.info(f"Assigned URL {url} to Crawler {target}")
-            assigned_tasks += 1
-            task_count += 1
-            time.sleep(0.1)
+        time.sleep(0.5)  # Master loop delay
 
-        time.sleep(1)
+    # After all URLs crawled
+    logging.info("Crawling completed. Sending shutdown signals to crawlers.")
 
-    logging.info("Master finished distributing URLs.")
+    # Shutdown crawlers
+    for crawler in crawler_ranks:
+        comm.send(None, dest=crawler, tag=0)
+
+    logging.info("Master node finished operations.")
 
 if __name__ == '__main__':
     master_process()

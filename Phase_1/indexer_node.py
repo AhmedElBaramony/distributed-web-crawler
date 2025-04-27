@@ -27,7 +27,6 @@ def indexer_process():
         if content_package is None:
             logging.info("Indexer received shutdown signal. Exiting.")
             break
-
         try:
             url = content_package.get('url')
             text = content_package.get('text')
