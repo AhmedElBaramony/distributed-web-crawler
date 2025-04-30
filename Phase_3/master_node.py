@@ -18,6 +18,7 @@ def setup_logger(role, rank):
 CRAWL_DELAY = 0.1
 MAX_CRAWL_DEPTH = 2
 HEARTBEAT_TIMEOUT = 5 
+TASK_TIMEOUT = 5 
 
 def master_process():
     comm = MPI.COMM_WORLD
@@ -46,6 +47,14 @@ def master_process():
     crawled_urls_set = set() # To avoid duplicate URLs
     busy_crawlers = {crawler: False for crawler in crawler_ranks}
     last_heartbeat = {crawler: datetime.now() for crawler in crawler_ranks}
+    assigned_tasks = {}
+
+    def mark_crawler_done(crawler, original_url=None):
+        busy_crawlers[crawler] = False
+        assigned_tasks.pop(crawler, None)
+        if original_url:
+            crawled_urls_set.add(original_url)
+        last_heartbeat[crawler] = datetime.now()
 
     logger.info("Starting task distribution...")
 
@@ -58,6 +67,7 @@ def master_process():
                 if url not in crawled_urls_set:
                     comm.send((url, depth), dest=crawler, tag=0)
                     busy_crawlers[crawler] = True
+                    assigned_tasks[crawler] = (url, depth, datetime.now())
                     logger.info(f"Assigned URL '{url}' (Depth {depth}) to Crawler {crawler}")
                     time.sleep(CRAWL_DELAY)
 
@@ -76,8 +86,8 @@ def master_process():
                         if new_url not in crawled_urls_set and new_url not in [u for u, _ in urls_to_crawl_queue]:
                             urls_to_crawl_queue.append((new_url, original_depth + 1))
 
-                busy_crawlers[src] = False
-
+                mark_crawler_done(src, original_url)
+            
             elif tag == 98:
                 last_heartbeat[src] = datetime.now()
                 logger.info(f"Received heartbeat from Crawler {src}")
@@ -88,13 +98,27 @@ def master_process():
 
             elif tag == 999:
                 logger.error(f"Error from Crawler {src}: {data}")
+                if src in assigned_tasks:
+                    failed_url, failed_depth, _ = assigned_tasks.pop(src)
+                    urls_to_crawl_queue.append((failed_url, failed_depth))
+                    logger.info(f"Re-queued failed URL '{failed_url}' from Crawler {src}")
                 busy_crawlers[src] = False
+                last_heartbeat[src] = datetime.now()
 
 
         for crawler, last_time in last_heartbeat.items():
             if (datetime.now() - last_time).total_seconds() > HEARTBEAT_TIMEOUT:
                 logger.warning(f"Missed heartbeat from Crawler {crawler}. May be down.")
       
+        for crawler, task_info in list(assigned_tasks.items()):
+            url, depth, assigned_time = task_info
+            if (datetime.now() - assigned_time).total_seconds() > TASK_TIMEOUT:
+                logger.warning(f"Crawler {crawler} timed out on URL '{url}'. Reassigning task.")
+                urls_to_crawl_queue.append((url, depth))  # Re-queue the task
+                assigned_tasks.pop(crawler)
+                busy_crawlers[crawler] = False
+
+
         time.sleep(0.2)
 
     logger.info("Crawling finished. Sending shutdown signals to Crawlers and Indexer.")
