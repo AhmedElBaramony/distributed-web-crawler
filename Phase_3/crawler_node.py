@@ -16,7 +16,7 @@ def setup_logger(role, rank):
     logger.addHandler(handler)
     return logger
 
-CRAWL_DELAY = 2 
+CRAWL_DELAY = 0.1
 
 def extract_urls(base_url, html_content):
     soup = BeautifulSoup(html_content, 'html.parser')

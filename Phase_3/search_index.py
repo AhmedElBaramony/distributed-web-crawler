@@ -1,56 +1,49 @@
-# search_index_csv.py
-
-import csv
-
-def load_index_from_csv(filename="index.csv"):
-    """Load the index from a CSV file into a dictionary."""
-    index = {}
-    try:
-        with open(filename, 'r', encoding='utf-8') as csvfile:
-            reader = csv.DictReader(csvfile)
-            for row in reader:
-                word = row['Word'].lower()
-                url = row['URL']
-                if word not in index:
-                    index[word] = set()
-                index[word].add(url)
-    except FileNotFoundError:
-        print("❌ index.csv not found! Make sure the index file exists.")
-        return None
-    return index
-
-def search_word(index, word):
-    """Search for a word in the index and return URLs."""
-    word = word.lower()
-    return index.get(word, set())
+from whoosh import index
+from whoosh.qparser import QueryParser
+import os
 
 def main():
-    print("🔎 Loading the index from CSV...")
-    index = load_index_from_csv()
-    
-    if index is None:
+    index_dir = "indexdir"
+
+    if not os.path.exists(index_dir):
+        print("❌ Whoosh index not found. Make sure 'indexdir/' exists.")
         return
 
-    print("✅ Index loaded successfully!")
-    print(f"Total keywords indexed: {len(index)}")
-    print("\nType a word to search for URLs. Type 'exit' to quit.\n")
+    print("🔎 Loading Whoosh index...")
 
-    while True:
-        query = input("🔍 Enter search word: ").strip()
-        if query.lower() == 'exit':
-            print("👋 Exiting search.")
-            break
-        if not query:
-            print("⚠️ Please enter a word.")
-            continue
+    try:
+        ix = index.open_dir(index_dir)
+    except Exception as e:
+        print(f"❌ Error opening index: {e}")
+        return
 
-        results = search_word(index, query)
-        if results:
-            print(f"✅ Word '{query}' found in {len(results)} page(s):")
-            for url in results:
-                print(f" - {url}")
-        else:
-            print(f"❌ Word '{query}' not found in any page.")
+    with ix.searcher() as searcher:
+        parser = QueryParser("content", schema=ix.schema)
+
+        print("✅ Index loaded successfully!")
+        print(f"📚 Available fields: {list(ix.schema.names())}")
+        print("Type a search query (use AND/OR, wildcards, quotes). Type 'exit' to quit.\n")
+
+        while True:
+            query_str = input("🔍 Enter search: ").strip()
+            if query_str.lower() == "exit":
+                print("👋 Exiting.")
+                break
+            if not query_str:
+                print("⚠️ Please enter a search term.")
+                continue
+
+            try:
+                query = parser.parse(query_str)
+                results = searcher.search(query, limit=20)
+                if results:
+                    print(f"✅ Found {len(results)} result(s):")
+                    for hit in results:
+                        print(f" - {hit['url']}")
+                else:
+                    print("❌ No results found.")
+            except Exception as e:
+                print(f"❌ Error parsing query: {e}")
 
 if __name__ == "__main__":
     main()
