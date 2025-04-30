@@ -1,6 +1,7 @@
 from mpi4py import MPI
 import time
 import logging
+import threading
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
@@ -31,6 +32,11 @@ def extract_text(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
     return soup.get_text(separator=' ', strip=True)
 
+def send_heartbeat(comm, rank):
+    while True:
+        comm.send(f"Heartbeat from Crawler {rank}", dest=0, tag=98)
+        time.sleep(5) 
+
 def crawler_process():
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
@@ -39,6 +45,9 @@ def crawler_process():
     status = MPI.Status()
 
     logger.info(f"Crawler node {rank} started.")
+
+    heartbeat_thread = threading.Thread(target=send_heartbeat, args=(comm, rank), daemon=True)
+    heartbeat_thread.start()
 
     while True:
         url_info = comm.recv(source=0, tag=0, status=status)

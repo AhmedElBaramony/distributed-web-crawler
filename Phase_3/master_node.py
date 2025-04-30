@@ -3,6 +3,7 @@
 from mpi4py import MPI
 import time
 import logging
+from datetime import datetime
 
 # Setup organized logging
 def setup_logger(role, rank):
@@ -16,6 +17,7 @@ def setup_logger(role, rank):
 
 CRAWL_DELAY = 0.1
 MAX_CRAWL_DEPTH = 2
+HEARTBEAT_TIMEOUT = 5 
 
 def master_process():
     comm = MPI.COMM_WORLD
@@ -43,10 +45,13 @@ def master_process():
     urls_to_crawl_queue = list(seed_urls)
     crawled_urls_set = set() # To avoid duplicate URLs
     busy_crawlers = {crawler: False for crawler in crawler_ranks}
+    last_heartbeat = {crawler: datetime.now() for crawler in crawler_ranks}
 
     logger.info("Starting task distribution...")
 
+
     while urls_to_crawl_queue or any(busy_crawlers.values()):
+
         for crawler in crawler_ranks:
             if not busy_crawlers[crawler] and urls_to_crawl_queue:
                 url, depth = urls_to_crawl_queue.pop(0)
@@ -73,6 +78,10 @@ def master_process():
 
                 busy_crawlers[src] = False
 
+            elif tag == 98:
+                last_heartbeat[src] = datetime.now()
+                logger.info(f"Received heartbeat from Crawler {src}")
+
             elif tag == 99:
                 logger.info(f"Status from Crawler {src}: {data}")
                 busy_crawlers[src] = False
@@ -81,6 +90,11 @@ def master_process():
                 logger.error(f"Error from Crawler {src}: {data}")
                 busy_crawlers[src] = False
 
+
+        for crawler, last_time in last_heartbeat.items():
+            if (datetime.now() - last_time).total_seconds() > HEARTBEAT_TIMEOUT:
+                logger.warning(f"Missed heartbeat from Crawler {crawler}. May be down.")
+      
         time.sleep(0.2)
 
     logger.info("Crawling finished. Sending shutdown signals to Crawlers and Indexer.")
