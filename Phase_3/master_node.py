@@ -1,5 +1,3 @@
-# master_node.py
-
 from mpi4py import MPI
 import time
 import logging
