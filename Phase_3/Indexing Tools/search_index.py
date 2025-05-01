@@ -1,6 +1,14 @@
 from whoosh import index
-from whoosh.qparser import QueryParser
+from whoosh.qparser import QueryParser, MultifieldParser
+from whoosh import scoring
+from whoosh.highlight import HtmlFormatter, ContextFragmenter
 import os
+from datetime import datetime
+
+def format_timestamp(timestamp):
+    if isinstance(timestamp, datetime):
+        return timestamp.strftime("%Y-%m-%d %H:%M:%S")
+    return "Unknown"
 
 def main():
     index_dir = "indexdir"
@@ -18,11 +26,21 @@ def main():
         return
 
     with ix.searcher() as searcher:
-        parser = QueryParser("content", schema=ix.schema)
+        # Create a multifield parser that searches both title and content
+        parser = MultifieldParser(["title", "content"], schema=ix.schema)
+        
+        # Configure highlighting
+        formatter = HtmlFormatter(between="...")
+        fragmenter = ContextFragmenter(maxchars=200, surround=50)
 
         print("✅ Index loaded successfully!")
         print(f"📚 Available fields: {list(ix.schema.names())}")
-        print("Type a search query (use AND/OR, wildcards, quotes). Type 'exit' to quit.\n")
+        print("\nSearch Tips:")
+        print("- Use AND/OR/NOT for boolean search (e.g., 'python AND web')")
+        print("- Use quotes for phrase search (e.g., '\"web crawler\"')")
+        print("- Use wildcards (e.g., 'web*' for web, website, etc.)")
+        print("- Use field:value syntax (e.g., 'title:python')")
+        print("- Type 'exit' to quit\n")
 
         while True:
             query_str = input("🔍 Enter search: ").strip()
@@ -35,13 +53,28 @@ def main():
 
             try:
                 query = parser.parse(query_str)
-                results = searcher.search(query, limit=20)
+                results = searcher.search(query, limit=20, scored=True)
+                
                 if results:
-                    print(f"✅ Found {len(results)} result(s):")
+                    print(f"\n✅ Found {len(results)} result(s):")
                     for hit in results:
-                        print(f" - {hit['url']}")
+                        print(f"\n📌 URL: {hit['url']}")
+                        print(f"📝 Title: {hit['title']}")
+                        print(f"⏰ Indexed: {format_timestamp(hit['timestamp'])}")
+                        
+                        # Highlight matching text
+                        if 'content' in hit:
+                            highlighted = hit.highlights("content", 
+                                                       text=hit['content'],
+                                                       fragmenter=fragmenter,
+                                                       formatter=formatter)
+                            if highlighted:
+                                print(f"📄 Snippet: {highlighted}")
+                        
+                        print("-" * 80)
                 else:
                     print("❌ No results found.")
+                    
             except Exception as e:
                 print(f"❌ Error parsing query: {e}")
 

@@ -5,6 +5,7 @@ import threading
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
+import os
 
 # Setup organized logging
 def setup_logger(role, rank):
@@ -16,7 +17,8 @@ def setup_logger(role, rank):
     logger.addHandler(handler)
     return logger
 
-CRAWL_DELAY = 0.1
+CRAWL_DELAY = 2 
+FAIL_AFTER_SECONDS = 10  # Time after which crawler rank 1 will fail
 
 def extract_urls(base_url, html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
@@ -35,7 +37,7 @@ def extract_text(html_content):
 def send_heartbeat(comm, rank):
     while True:
         comm.send(f"Heartbeat from Crawler {rank}", dest=0, tag=98)
-        time.sleep(5) 
+        time.sleep(5)
 
 def crawler_process():
     comm = MPI.COMM_WORLD
@@ -46,8 +48,12 @@ def crawler_process():
 
     logger.info(f"Crawler node {rank} started.")
 
+    # Start heartbeat thread
     heartbeat_thread = threading.Thread(target=send_heartbeat, args=(comm, rank), daemon=True)
     heartbeat_thread.start()
+
+    # Record start time
+    start_time = time.time()
 
     while True:
         url_info = comm.recv(source=0, tag=0, status=status)

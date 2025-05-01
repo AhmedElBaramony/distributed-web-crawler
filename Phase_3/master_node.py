@@ -31,9 +31,9 @@ def master_process():
 
     logger.info(f"Master node started with rank {rank} of {size}")
 
-    if size < 3:
-        logger.error("At least 3 processes are required: Master, Crawler(s), and Indexer.")
-        return
+    #if size < 3:
+        #logger.error("At least 3 processes are required: Master, Crawler(s), and Indexer.")
+       # return
 
     crawler_ranks = list(range(1, size - 1))
     indexer_rank = size - 1
