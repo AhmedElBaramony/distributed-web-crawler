@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Distributed Crawler Dashboard</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+<div class="container py-5">
+  <h2 class="mb-4">🌐 Distributed Crawler Web Interface</h2>
+
+  <!-- Seed URL Form -->
+  <div class="mb-4">
+    <label for="seedUrl" class="form-label">Seed Website URL</label>
+    <input type="text" class="form-control" id="seedUrl" placeholder="https://example.com">
+    <button class="btn btn-primary mt-2" onclick="startCrawl()">Start Crawling</button>
+  </div>
+
+  <!-- Node Controls -->
+  <div class="mb-4">
+    <h5>Node Controls</h5>
+    <div class="btn-group" role="group">
+      <button class="btn btn-success" onclick="startNode('master')">Start Master</button>
+      <button class="btn btn-danger" onclick="stopNode('master')">Stop Master</button>
+    </div>
+    <div class="btn-group ms-3" role="group">
+      <button class="btn btn-success" onclick="startNode('indexer')">Start Indexer</button>
+      <button class="btn btn-danger" onclick="stopNode('indexer')">Stop Indexer</button>
+    </div>
+    <div class="btn-group ms-3" role="group">
+      <button class="btn btn-success" onclick="startNode('crawler')">Start Crawler</button>
+      <button class="btn btn-danger" onclick="stopNode('crawler')">Stop Crawler</button>
+    </div>
+  </div>
+
+  <!-- Search Index -->
+  <div class="mb-4">
+    <h5>Search Indexed Data</h5>
+    <div class="input-group">
+      <input type="text" id="searchQuery" class="form-control" placeholder="Search terms...">
+      <button class="btn btn-outline-primary" onclick="searchIndex()">Search</button>
+    </div>
+    <ul id="searchResults" class="list-group mt-2"></ul>
+  </div>
+
+  <!-- Index Stats -->
+  <div class="mb-4">
+    <h5>Index Inspection</h5>
+    <button class="btn btn-outline-info" onclick="inspectIndex()">Show Index Summary</button>
+    <div id="indexSummary" class="mt-2 text-muted">...</div>
+  </div>
+</div>
+
+<script>
+  function startNode(type) {
+    fetch(`/start/${type}`)
+      .then(res => res.text())
+      .then(alert)
+      .catch(err => alert("Failed to start node: " + err));
+  }
+
+  function stopNode(type) {
+    fetch(`/stop/${type}`)
+      .then(res => res.text())
+      .then(alert)
+      .catch(err => alert("Failed to stop node: " + err));
+  }
+
+  function startCrawl() {
+    const seed = document.getElementById("seedUrl").value;
+    if (!seed.trim()) {
+      alert("Please enter a valid URL.");
+      return;
+    }
+    fetch(`/seed?url=${encodeURIComponent(seed)}`)
+      .then(res => res.text())
+      .then(alert)
+      .catch(err => alert("Failed to set seed URL: " + err));
+  }
+
+  function searchIndex() {
+    const q = document.getElementById("searchQuery").value;
+    fetch(`/search?q=${encodeURIComponent(q)}`)
+      .then(res => res.json())
+      .then(data => {
+        const ul = document.getElementById("searchResults");
+        ul.innerHTML = "";
+        data.results.forEach(item => {
+          const li = document.createElement("li");
+          li.className = "list-group-item";
+          li.textContent = item;
+          ul.appendChild(li);
+        });
+      });
+  }
+
+  function inspectIndex() {
+    fetch('/inspect')
+      .then(res => res.json())
+      .then(data => {
+        document.getElementById("indexSummary").textContent =
+          `Indexed URLs: ${data.total_urls}`;
+      });
+  }
+</script>
+</body>
+</html>
