@@ -2,28 +2,31 @@ from flask import Flask, render_template, jsonify, request, send_file
 from collections import defaultdict, deque
 from subprocess import Popen
 import time, threading, os, shutil
+from flask_cors import CORS
 
 from whoosh.index import create_in, open_dir, exists_in
 from whoosh.fields import Schema, TEXT, ID
 from whoosh.qparser import QueryParser
 from whoosh import scoring
+
 from sqs_config import s3, S3_BUCKET_NAME, download_from_s3
 
 app = Flask(__name__)
+CORS(app)
 
 INDEX_DIR = "s3_indexdir"
+index_lock = threading.Lock()  # ✅ Lock to protect index writes
 
-# In-memory store for logs
+# In-memory log and metric stores
 MAX_LOG_LINES = 200
 logs = defaultdict(lambda: deque(maxlen=MAX_LOG_LINES))
-
-# Real heartbeat and metric stores
 heartbeat_status = {}
 heartbeat_counts = defaultdict(int)
 pages_crawled = defaultdict(int)
 urls_indexed = defaultdict(int)
+queue_info = {"queued_tasks": 0, "active_crawls": 0}
 
-# Node config
+# Nodes and roles
 NODE_IDS = ["master", "indexer", "crawler1", "crawler2", "combined"]
 node_roles = {
     "master": "master",
@@ -32,51 +35,50 @@ node_roles = {
     "crawler2": "crawler"
 }
 
-queue_info = {"queued_tasks": 0, "active_crawls": 0}
-
-# Initialize the S3 Index directory
+# ============================
+# WHOOSH INDEX HANDLING
+# ============================
 def init_s3_index():
-    if not os.path.exists(INDEX_DIR):
-        os.mkdir(INDEX_DIR)
+    with index_lock:  # ✅ Critical section
+        if not os.path.exists(INDEX_DIR):
+            os.mkdir(INDEX_DIR)
 
-    schema = Schema(url=ID(stored=True, unique=True), content=TEXT(stored=True))
+        schema = Schema(url=ID(stored=True, unique=True), content=TEXT(stored=True))
 
-    if not exists_in(INDEX_DIR):
-        ix = create_in(INDEX_DIR, schema)
-        writer = ix.writer()
+        if not exists_in(INDEX_DIR):
+            ix = create_in(INDEX_DIR, schema)
+            writer = ix.writer()
 
-        print("[INDEX] Building Whoosh index from S3...")
-        response = s3.list_objects_v2(Bucket=S3_BUCKET_NAME, Prefix="pages/")
-        for obj in response.get("Contents", []):
-            key = obj["Key"]
-            if key.endswith(".html"):
-                try:
-                    url, content = download_from_s3(key)
-                    writer.add_document(url=url, content=content)
-                except Exception as e:
-                    print(f"[ERROR] Indexing {key} failed: {e}")
-        writer.commit()
-        print("[INDEX] S3 indexing complete.")
-    else:
-        print("[INDEX] Existing Whoosh index found.")
+            print("[INDEX] Building Whoosh index from S3...")
+            response = s3.list_objects_v2(Bucket=S3_BUCKET_NAME, Prefix="pages/")
+            for obj in response.get("Contents", []):
+                key = obj["Key"]
+                if key.endswith(".html"):
+                    try:
+                        url, content = download_from_s3(key)
+                        writer.add_document(url=url, content=content)
+                    except Exception as e:
+                        print(f"[ERROR] Indexing {key} failed: {e}")
+            writer.commit()
+            print("[INDEX] S3 indexing complete.")
+        else:
+            print("[INDEX] Existing Whoosh index found.")
 
-# Run once on startup
-init_s3_index()
-
-# 🔁 Background thread: periodic reindexing every 2 minutes
 def background_reindex(interval=120):
     while True:
         print("[REINDEX] Refreshing index from S3...")
         try:
             shutil.rmtree(INDEX_DIR)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[REINDEX] Failed to delete old index: {e}")
         init_s3_index()
         time.sleep(interval)
 
 threading.Thread(target=background_reindex, daemon=True).start()
 
-# Background thread: expire offline heartbeats
+# ============================
+# HEARTBEAT MONITORING
+# ============================
 def auto_cleanup():
     while True:
         time.sleep(5)
@@ -87,6 +89,9 @@ def auto_cleanup():
 
 threading.Thread(target=auto_cleanup, daemon=True).start()
 
+# ============================
+# ROUTES
+# ============================
 @app.route("/")
 def index():
     return render_template("index.html", node_ids=NODE_IDS, node_roles=node_roles)
@@ -143,7 +148,7 @@ def get_metrics():
         if is_online:
             if role == "crawler":
                 metrics["heartbeat_counts"][node] = heartbeat_counts[node]
-                metrics["pages_crawled[node]"] = pages_crawled[node]
+                metrics["pages_crawled"][node] = pages_crawled[node]
             elif role == "indexer":
                 metrics["urls_indexed"][node] = urls_indexed[node]
         else:
@@ -163,10 +168,12 @@ def download_logs(node):
         f.write("\n".join(logs[node]))
     return send_file(filename, as_attachment=True)
 
-# ✅ SEARCH ENDPOINT + FUNCTION
+# ============================
+# SEARCH
+# ============================
 def search_index(query_string):
     try:
-        ix = open_dir("s3_indexdir")
+        ix = open_dir(INDEX_DIR)
     except Exception as e:
         return [f"Error opening index: {e}"]
 
@@ -176,8 +183,7 @@ def search_index(query_string):
         query = parser.parse(query_string)
         hits = searcher.search(query, limit=20)
         for hit in hits:
-            url = hit.get("url", "Unknown URL")
-            results.append(url)
+            results.append(hit.get("url", "Unknown URL"))
     return results
 
 @app.route("/api/search")
@@ -187,5 +193,6 @@ def search():
         return jsonify([])
     return jsonify(search_index(query))
 
+
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, host="0.0.0.0", port=5000)

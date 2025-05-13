@@ -57,8 +57,13 @@ def delete_parsed_message_sqs(queue_url, parsed_message):
 # ===============================
 # S3 Helper Functions
 # ===============================
-def upload_to_s3(content, key):
-    response = s3.put_object(Bucket=S3_BUCKET_NAME, Key=key, Body=content)
+def upload_to_s3(content, key, metadata=None):
+    response = s3.put_object(
+        Bucket=S3_BUCKET_NAME,
+        Key=key,
+        Body=content.encode("utf-8") if isinstance(content, str) else content,
+        Metadata=metadata or {}
+    )
     return response
 
 def url_to_s3_key(url):
@@ -67,4 +72,6 @@ def url_to_s3_key(url):
 
 def download_from_s3(key):
     obj = s3.get_object(Bucket=S3_BUCKET_NAME, Key=key)
-    return obj['Body'].read().decode('utf-8')
+    body = obj['Body'].read().decode('utf-8')
+    url = obj['Metadata'].get("original_url", key)
+    return url, body

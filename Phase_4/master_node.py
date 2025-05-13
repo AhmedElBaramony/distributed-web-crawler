@@ -2,8 +2,6 @@ import time
 import logging
 from datetime import datetime
 from uuid import uuid4
-from urllib.parse import urlparse, urlunparse
-
 
 from sqs_config import (
     CRAWL_QUEUE_URL,
@@ -13,12 +11,22 @@ from sqs_config import (
     receive_messages_sqs,
     delete_parsed_message_sqs
 )
+from dashboard_logger import start_heartbeat
 
 # ============================
-# Logging Setup
+# Setup
 # ============================
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+
+NODE_ID = "master"
+start_heartbeat(NODE_ID)
+
 logger = logging.getLogger("Master")
+logger.setLevel(logging.INFO)
+
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s"))
+
+logger.addHandler(console_handler)
 
 # ============================
 # Configuration
@@ -31,7 +39,6 @@ TASK_TIMEOUT = 55       # seconds
 # ============================
 # Master Logic
 # ============================
-
 def main():
     logger.info("[Master] Starting")
 
@@ -63,18 +70,11 @@ def main():
             logger.info(f"[Assigned] {url} at depth {depth} → Task ID {task_id}")
             time.sleep(CRAWL_DELAY)
 
-        # Receive heartbeats
+        # Receive heartbeats from SQS
         for msg in receive_messages_sqs(HEARTBEAT_QUEUE_URL, max_messages=10):
-            if not isinstance(msg, dict):
-                logger.warning(f"[Malformed heartbeat message] {msg}")
-                continue
-
             payload = msg.get("payload", {})
-            if not isinstance(payload, dict):
-                logger.warning(f"[Malformed payload] {payload}")
-                continue
-
             worker_id = payload.get("worker_id")
+
             if worker_id:
                 last_heartbeat[worker_id] = datetime.now()
                 logger.info(f"[Heartbeat] from {worker_id}")
@@ -88,8 +88,7 @@ def main():
             url = payload.get("url")
             new_urls = payload.get("new_urls", [])
             source_depth = payload.get("source_depth", 0)
-            
-            #if url:
+
             crawled_urls_set.add(url)
             if task_id in assigned_tasks:
                 assigned_tasks.pop(task_id)
@@ -100,6 +99,7 @@ def main():
                 for new_url in new_urls:
                     if new_url not in crawled_urls_set and new_url not in [u for u, _ in urls_to_crawl_queue]:
                         urls_to_crawl_queue.append((new_url, source_depth + 1))
+
             logger.info(f"[Result] {url} → {len(new_urls)} new URLs")
             delete_parsed_message_sqs(RESULT_QUEUE_URL, msg)
 
@@ -110,7 +110,7 @@ def main():
                 urls_to_crawl_queue.append((url, depth))
                 assigned_tasks.pop(task_id)
 
-        # Check for dead workers
+        # Detect dead workers
         for worker_id, last_seen in list(last_heartbeat.items()):
             if (now - last_seen).total_seconds() > HEARTBEAT_TIMEOUT:
                 logger.warning(f"[Missed] No heartbeat from {worker_id} in {HEARTBEAT_TIMEOUT} sec")

@@ -4,6 +4,9 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 import os
+import threading
+from dashboard_logger import start_heartbeat
+import urllib3
 from sqs_config import (
     CRAWL_QUEUE_URL,
     HEARTBEAT_QUEUE_URL,
@@ -15,10 +18,31 @@ from sqs_config import (
     url_to_s3_key,
 )
 
+# ============================
+# Setup
+# ============================
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 EXCLUDED_EXTENSIONS = ('.pdf', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.zip', '.mp4', '.doc', '.docx', '.xls', '.xlsx')
+NODE_ID = os.getenv("CRAWLER_ID", "crawler1")  # crawler1 or crawler2
+DASHBOARD_HOST = "http://desired-baboon-mistakenly.ngrok-free.app"
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+# ============================
+# Logging Setup
+# ============================
+
 logger = logging.getLogger("Crawler")
+logger.setLevel(logging.INFO)
+
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s"))
+logger.addHandler(console_handler)
+
+# Start dashboard heartbeat
+start_heartbeat(NODE_ID)
+
+# ============================
+# Helpers
+# ============================
 
 def extract_links_and_text(html, base_url):
     soup = BeautifulSoup(html, 'html.parser')
@@ -36,6 +60,16 @@ def extract_links_and_text(html, base_url):
 def send_heartbeat(worker_id):
     payload = {"worker_id": worker_id}
     send_message_sqs(HEARTBEAT_QUEUE_URL, "heartbeat", payload)
+
+def safe_post(url):
+    try:
+        requests.post(url, timeout=1, verify=False)
+    except Exception as e:
+        logger.warning(f"[Dashboard Push Failed] {e}")
+
+# ============================
+# Main
+# ============================
 
 def main():
     worker_id = f"crawler-{int(time.time())}"
@@ -68,7 +102,7 @@ def main():
 
                 key = url_to_s3_key(url)
                 s3_path = f"pages/{key}"
-                upload_to_s3(text, s3_path)
+                upload_to_s3(text, s3_path, metadata={"original_url": url})
 
                 result_payload = {
                     "url": url,
@@ -78,8 +112,18 @@ def main():
                     "s3_key": s3_path
                 }
 
-                send_message_sqs(RESULT_QUEUE_URL, "crawl_result", result_payload)
+                try:
+                    send_message_sqs(RESULT_QUEUE_URL, "crawl_result", result_payload, group_id="results")
+                except Exception as e:
+                    logger.error(f"[SQS ERROR] Failed to send result to queue: {e}")
+                    
                 logger.info(f"[Crawler] Sent crawl result for: {url} with {len(links)} links")
+                
+                threading.Thread(
+                    target=safe_post,
+                    args=(f"{DASHBOARD_HOST}/api/pagecount/{NODE_ID}",),
+                    daemon=True
+                ).start()
 
             except Exception as e:
                 logger.error(f"[Crawler] Error crawling {url}: {e}")

@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Distributed Crawler Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body {
+      background-color: #f8f9fa;
+    }
+    .log-box {
+      height: 300px;
+      overflow-y: auto;
+      background: #fff;
+      border: 1px solid #dee2e6;
+      padding: 10px;
+      font-family: monospace;
+      white-space: pre-wrap;
+      width: 100%;
+      box-shadow: 0 0 4px rgba(0,0,0,0.1);
+    }
+    .status-indicator {
+      font-size: 1.1rem;
+      font-weight: 500;
+    }
+    .search-section {
+      background: #fff;
+      padding: 1rem;
+      border-radius: 6px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+      margin-bottom: 2rem;
+    }
+  </style>
+</head>
+<body>
+<div class="container py-4">
+  <h2 class="mb-4 text-center">🌐 Distributed Web Crawler Dashboard</h2>
+
+  <!-- 🔍 Search -->
+  <div class="search-section">
+    <h5>Search Indexed Content</h5>
+    <div class="input-group mb-2">
+      <input type="text" class="form-control" id="search-input" placeholder="Type keywords and hit Enter">
+    </div>
+    <ul id="search-results" class="list-group"></ul>
+  </div>
+
+  <!-- 📊 Status Section -->
+  <div class="row mb-4" id="status-cards">
+    <!-- Populated by JS -->
+  </div>
+
+  <!-- 📜 Logs Section -->
+  <div class="row">
+    <div class="col-12">
+      {% for node in node_ids if node != 'combined' %}
+      <div class="mb-4">
+        <h6 class="fw-bold">{{ node|capitalize }} Logs</h6>
+        <div id="log-{{ node }}" class="log-box"></div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<script>
+  const nodeRoles = JSON.parse('{{ node_roles | tojson | safe }}');
+  const nodeIds = Object.keys(nodeRoles);
+  const POLL_INTERVAL_MS = 3000;
+
+  document.addEventListener("DOMContentLoaded", () => {
+    updateMetrics();
+    updateLogs();
+    setInterval(updateMetrics, POLL_INTERVAL_MS);
+    setInterval(updateLogs, POLL_INTERVAL_MS);
+
+    const input = document.getElementById("search-input");
+    input.addEventListener("keydown", e => {
+      if (e.key === "Enter") {
+        fetch(`/api/search?q=${encodeURIComponent(input.value)}`)
+          .then(res => res.json())
+          .then(data => {
+            const container = document.getElementById("search-results");
+            container.innerHTML = "";
+            if (data.length === 0) {
+              container.innerHTML = "<li class='list-group-item text-muted'>No results found.</li>";
+              return;
+            }
+            data.forEach(url => {
+              container.innerHTML += `<li class="list-group-item"><a href="${url}" target="_blank">${url}</a></li>`;
+            });
+          });
+      }
+    });
+  });
+
+  function updateLogs() {
+    nodeIds.forEach(nodeId => {
+      fetch(`/api/logs/${nodeId}`)
+        .then(res => res.json())
+        .then(data => {
+          const logBox = document.getElementById(`log-${nodeId}`);
+          if (logBox) {
+            logBox.innerText = data.join("\n");
+            logBox.scrollTop = logBox.scrollHeight;
+          }
+        });
+    });
+  }
+
+  function updateMetrics() {
+    fetch("/api/metrics")
+      .then(res => res.json())
+      .then(data => {
+        const panel = document.getElementById("status-cards");
+        panel.innerHTML = "";
+
+        const statuses = data.heartbeat_status;
+        const crawled = data.pages_crawled;
+        const indexed = data.urls_indexed;
+        const heartbeats = data.heartbeat_counts;
+        const queue = data.queue;
+
+        nodeIds.forEach(node => {
+          const role = nodeRoles[node];
+          const online = statuses[node] === "online";
+          const html = `
+            <div class="col-md-3 mb-3">
+              <div class="card ${online ? '' : 'border-danger'}">
+                <div class="card-body py-2">
+                  <h6 class="card-title">${node.toUpperCase()}</h6>
+                  <p class="status-indicator">${online ? '🟢 Online' : '🔴 Offline'}</p>
+                  ${role === 'crawler' ? `<p>💓 Heartbeats: ${heartbeats[node] || 0}</p><p>📄 Crawled: ${crawled[node] || 0}</p>` : ''}
+                  ${role === 'indexer' ? `<p>📦 Indexed: ${indexed[node] || 0}</p>` : ''}
+                </div>
+              </div>
+            </div>`;
+          panel.insertAdjacentHTML("beforeend", html);
+        });
+
+        panel.insertAdjacentHTML("beforeend", `
+          <div class="col-md-3 mb-3">
+            <div class="card bg-warning-subtle">
+              <div class="card-body py-2">
+                <h6 class="card-title">Queue</h6>
+                <p>🕒 Queued: ${queue.queued_tasks}</p>
+                <p>🚀 Active: ${queue.active_crawls}</p>
+              </div>
+            </div>
+          </div>
+        `);
+      });
+  }
+</script>
+</body>
+</html>

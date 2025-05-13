@@ -1,28 +1,50 @@
 import time
-import logging
 import os
+import requests
+import threading
+import logging
 from whoosh.index import create_in, open_dir
 from whoosh.fields import Schema, TEXT, ID
 from sqs_config import RESULT_QUEUE_URL, receive_messages_sqs, delete_parsed_message_sqs, download_from_s3
+from dashboard_logger import start_heartbeat
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+# ==== Constants ====
+NODE_ID = "indexer"
+INDEX_DIR = "indexdir"
+index_lock = threading.Lock()
+
+# ==== Start heartbeat ====
+start_heartbeat(NODE_ID)
+
+# ==== Console Logging Setup ====
 logger = logging.getLogger("Indexer")
+logger.setLevel(logging.INFO)
 
-if not os.path.exists("indexdir"):
-    os.mkdir("indexdir")
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s"))
+
+logger.addHandler(console_handler)
+
+# ==== Initialize Whoosh Index ====
+if not os.path.exists(INDEX_DIR):
+    os.mkdir(INDEX_DIR)
 
 schema = Schema(url=ID(stored=True, unique=True), content=TEXT(stored=True))
-if not os.listdir("indexdir"):
-    ix = create_in("indexdir", schema)
-else:
-    ix = open_dir("indexdir")
+with index_lock:
+    if not os.listdir(INDEX_DIR):
+        ix = create_in(INDEX_DIR, schema)
+    else:
+        ix = open_dir(INDEX_DIR)
 
+# ==== Index a single URL ====
 def index_url(url, content):
-    writer = ix.writer()
-    writer.update_document(url=url, content=content)
-    writer.commit()
+    with index_lock:
+        writer = ix.writer()
+        writer.update_document(url=url, content=content)
+        writer.commit()
     logger.info(f"[Whoosh] Indexed: {url}")
 
+# ==== Main Indexer Loop ====
 def main():
     logger.info("[Indexer] Started and listening for crawl results...")
 
@@ -35,15 +57,14 @@ def main():
 
         for msg in messages:
             payload = msg.get("payload", {})
-            url = payload.get("url")
             s3_key = payload.get("s3_key")
 
-            if url and s3_key:
+            if s3_key:
                 try:
-                    content = download_from_s3(s3_key)
+                    url, content = download_from_s3(s3_key)
                     index_url(url, content)
                 except Exception as e:
-                    logger.error(f"[Indexer] Failed to index {url}: {e}")
+                    logger.error(f"[Indexer] Failed to index {s3_key}: {e}")
 
             delete_parsed_message_sqs(RESULT_QUEUE_URL, msg)
 
