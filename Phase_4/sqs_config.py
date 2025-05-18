@@ -22,6 +22,8 @@ s3 = boto3.client('s3', region_name=AWS_REGION,
 # ===============================
 # Hardcoded Queue URLs and S3
 # ===============================
+DASHBOARD_HOST = "http://192.168.1.12:5000"
+
 CRAWL_QUEUE_URL = 'https://sqs.eu-north-1.amazonaws.com/452876378545/CrawlQueue.fifo'
 HEARTBEAT_QUEUE_URL = 'https://sqs.eu-north-1.amazonaws.com/452876378545/HeartBeatQueue'
 RESULT_QUEUE_URL = 'https://sqs.eu-north-1.amazonaws.com/452876378545/ResultQueue'

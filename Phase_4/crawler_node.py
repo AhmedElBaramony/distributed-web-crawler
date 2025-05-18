@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 import os
 import threading
-from dashboard_logger import start_heartbeat
+from dashboard_logger import DASHBOARD_HOST,start_heartbeat, DashboardLogHandler
 import urllib3
 from sqs_config import (
     CRAWL_QUEUE_URL,
@@ -18,30 +18,39 @@ from sqs_config import (
     url_to_s3_key,
 )
 
-# ============================
-# Setup
-# ============================
+# Disable SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# ============================
+# Constants
+# ============================
+
 EXCLUDED_EXTENSIONS = ('.pdf', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.zip', '.mp4', '.doc', '.docx', '.xls', '.xlsx')
 NODE_ID = os.getenv("CRAWLER_ID", "crawler1")  # crawler1 or crawler2
-DASHBOARD_HOST = "http://desired-baboon-mistakenly.ngrok-free.app"
 
 # ============================
 # Logging Setup
 # ============================
 
+# Create a logger
 logger = logging.getLogger("Crawler")
 logger.setLevel(logging.INFO)
 
+# Add console handler
 console_handler = logging.StreamHandler()
 console_handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s"))
 logger.addHandler(console_handler)
 
-# Start dashboard heartbeat
+# Add dashboard handler
+dashboard_handler = DashboardLogHandler(NODE_ID)
+dashboard_handler.setFormatter(logging.Formatter("%(message)s"))
+logger.addHandler(dashboard_handler)
+
+# Start dashboard heartbeat (to keep track of the crawler's status)
 start_heartbeat(NODE_ID)
 
 # ============================
-# Helpers
+# Helper Functions
 # ============================
 
 def extract_links_and_text(html, base_url):

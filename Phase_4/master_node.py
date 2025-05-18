@@ -11,7 +11,7 @@ from sqs_config import (
     receive_messages_sqs,
     delete_parsed_message_sqs
 )
-from dashboard_logger import start_heartbeat
+from dashboard_logger import start_heartbeat, DashboardLogHandler
 
 # ============================
 # Setup
@@ -23,10 +23,15 @@ start_heartbeat(NODE_ID)
 logger = logging.getLogger("Master")
 logger.setLevel(logging.INFO)
 
+# Add console handler
 console_handler = logging.StreamHandler()
 console_handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s"))
-
 logger.addHandler(console_handler)
+
+# Add dashboard handler
+dashboard_handler = DashboardLogHandler(NODE_ID)
+dashboard_handler.setFormatter(logging.Formatter("%(message)s"))
+logger.addHandler(dashboard_handler)
 
 # ============================
 # Configuration

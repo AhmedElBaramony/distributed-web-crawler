@@ -3,6 +3,7 @@ from collections import defaultdict, deque
 from subprocess import Popen
 import time, threading, os, shutil
 from flask_cors import CORS
+import urllib.parse
 
 from whoosh.index import create_in, open_dir, exists_in
 from whoosh.fields import Schema, TEXT, ID
@@ -102,7 +103,7 @@ def handle_logs(node):
         return jsonify(list(logs[node]))
     
     msg = request.args.get("msg", "")
-    print(f"[DEBUG] Received log for {node}: {msg}")
+    msg = urllib.parse.unquote(msg)
     if not msg.strip():
         return "empty", 400
 
@@ -138,7 +139,7 @@ def get_metrics():
         "heartbeat_counts": {},
         "pages_crawled": {},
         "urls_indexed": {},
-        "queue": queue_info
+        # "queue": queue_info  # queue removed
     }
 
     for node, role in node_roles.items():
@@ -158,6 +159,11 @@ def get_metrics():
                 heartbeat_counts[node] = 0
             elif role == "indexer":
                 urls_indexed[node] = 0
+
+    # Add global metrics
+    metrics["total_pages_crawled"] = sum(pages_crawled.values())
+    metrics["total_urls_indexed"] = sum(urls_indexed.values())
+    metrics["active_nodes"] = sum(1 for v in metrics["heartbeat_status"].values() if v == "online")
 
     return jsonify(metrics)
 
