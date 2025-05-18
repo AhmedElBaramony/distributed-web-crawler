@@ -1,25 +1,34 @@
+# ===============================
+# Import Libraries
+# ===============================
+
 from flask import Flask, render_template, jsonify, request, send_file
 from collections import defaultdict, deque
 from subprocess import Popen
 import time, threading, os, shutil
 from flask_cors import CORS
 import urllib.parse
-
 from whoosh.index import create_in, open_dir, exists_in
 from whoosh.fields import Schema, TEXT, ID
 from whoosh.qparser import QueryParser
 from whoosh import scoring
-
 from sqs_config import s3, S3_BUCKET_NAME, download_from_s3
 
+# ============================
+# Constants
+# ============================
+
+INDEX_DIR = "s3_indexdir"   # Directory for Whoosh index
+MAX_LOG_LINES = 200         # Maximum number of log lines to keep in memory
+
+# ============================
+# Flask App Initialization
+# ============================
 app = Flask(__name__)
 CORS(app)
+index_lock = threading.Lock() # Lock for index creation
 
-INDEX_DIR = "s3_indexdir"
-index_lock = threading.Lock()  # ✅ Lock to protect index writes
-
-# In-memory log and metric stores
-MAX_LOG_LINES = 200
+# ========== In-Memory Data Structures ==========
 logs = defaultdict(lambda: deque(maxlen=MAX_LOG_LINES))
 heartbeat_status = {}
 heartbeat_counts = defaultdict(int)
@@ -27,7 +36,7 @@ pages_crawled = defaultdict(int)
 urls_indexed = defaultdict(int)
 queue_info = {"queued_tasks": 0, "active_crawls": 0}
 
-# Nodes and roles
+# ========== Nodes & Roles ==========
 NODE_IDS = ["master", "indexer", "crawler1", "crawler2", "combined"]
 node_roles = {
     "master": "master",
@@ -37,10 +46,12 @@ node_roles = {
 }
 
 # ============================
-# WHOOSH INDEX HANDLING
+# Whoosh Index Handling
 # ============================
+
+# Initialize the Whoosh index
 def init_s3_index():
-    with index_lock:  # ✅ Critical section
+    with index_lock:
         if not os.path.exists(INDEX_DIR):
             os.mkdir(INDEX_DIR)
 
@@ -49,8 +60,8 @@ def init_s3_index():
         if not exists_in(INDEX_DIR):
             ix = create_in(INDEX_DIR, schema)
             writer = ix.writer()
-
             print("[INDEX] Building Whoosh index from S3...")
+
             response = s3.list_objects_v2(Bucket=S3_BUCKET_NAME, Prefix="pages/")
             for obj in response.get("Contents", []):
                 key = obj["Key"]
@@ -61,10 +72,12 @@ def init_s3_index():
                     except Exception as e:
                         print(f"[ERROR] Indexing {key} failed: {e}")
             writer.commit()
+
             print("[INDEX] S3 indexing complete.")
         else:
             print("[INDEX] Existing Whoosh index found.")
 
+# Background thread to refresh the index from S3 every 2 minutes
 def background_reindex(interval=120):
     while True:
         print("[REINDEX] Refreshing index from S3...")
@@ -78,8 +91,10 @@ def background_reindex(interval=120):
 threading.Thread(target=background_reindex, daemon=True).start()
 
 # ============================
-# HEARTBEAT MONITORING
+# Heartbeat and Cleanup
 # ============================
+
+# Auto-cleanup thread to reset heartbeat status for offline nodes (if no heartbeat for 10 seconds)
 def auto_cleanup():
     while True:
         time.sleep(5)
@@ -91,12 +106,15 @@ def auto_cleanup():
 threading.Thread(target=auto_cleanup, daemon=True).start()
 
 # ============================
-# ROUTES
+# Routes
 # ============================
+
+# ================ Dashboard Route ================
 @app.route("/")
 def index():
     return render_template("index.html", node_ids=NODE_IDS, node_roles=node_roles)
 
+# ================ Logs Routes ================
 @app.route("/api/logs/<node>", methods=["GET", "POST"])
 def handle_logs(node):
     if request.method == "GET":
@@ -115,22 +133,26 @@ def handle_logs(node):
     
     return "ok"
 
+# ================ Heartbeat Route ================
 @app.route("/api/heartbeat/<node>", methods=["GET"])
 def heartbeat(node):
     heartbeat_status[node] = time.time()
     heartbeat_counts[node] += 1
     return "OK"
 
+# ================ Crawled Pages Route ================
 @app.route("/api/pagecount/<node>", methods=["POST"])
 def update_pages_crawled(node):
     pages_crawled[node] += 1
     return "OK"
 
+# ================ Indexed URLs Route ================
 @app.route("/api/indexed/<node>", methods=["POST"])
 def update_indexed(node):
     urls_indexed[node] += 1
     return "OK"
 
+# ================ Queue Info Route ================
 @app.route("/api/metrics")
 def get_metrics():
     now = time.time()
@@ -139,7 +161,6 @@ def get_metrics():
         "heartbeat_counts": {},
         "pages_crawled": {},
         "urls_indexed": {},
-        # "queue": queue_info  # queue removed
     }
 
     for node, role in node_roles.items():
@@ -160,13 +181,14 @@ def get_metrics():
             elif role == "indexer":
                 urls_indexed[node] = 0
 
-    # Add global metrics
+    # Global Metrics
     metrics["total_pages_crawled"] = sum(pages_crawled.values())
     metrics["total_urls_indexed"] = sum(urls_indexed.values())
     metrics["active_nodes"] = sum(1 for v in metrics["heartbeat_status"].values() if v == "online")
 
     return jsonify(metrics)
 
+# ================ Download Logs Route ================ "Experimental"
 @app.route("/api/download/<node>")
 def download_logs(node):
     filename = f"logs_{node}.txt"
@@ -175,7 +197,7 @@ def download_logs(node):
     return send_file(filename, as_attachment=True)
 
 # ============================
-# SEARCH
+# Search Functionality
 # ============================
 def search_index(query_string):
     try:
@@ -192,6 +214,7 @@ def search_index(query_string):
             results.append(hit.get("url", "Unknown URL"))
     return results
 
+# ================ Search Route ================
 @app.route("/api/search")
 def search():
     query = request.args.get("q", "").strip()
@@ -199,6 +222,6 @@ def search():
         return jsonify([])
     return jsonify(search_index(query))
 
-
+# ================ Start Web App ================
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=5000)

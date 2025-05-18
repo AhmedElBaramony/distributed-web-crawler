@@ -36,13 +36,14 @@ logger.addHandler(dashboard_handler)
 # ============================
 # Configuration
 # ============================
-CRAWL_DELAY = 0.1
-MAX_CRAWL_DEPTH = 2
+
+CRAWL_DELAY = 0.1       # seconds
+MAX_CRAWL_DEPTH = 2     # max depth to crawl
 HEARTBEAT_TIMEOUT = 10  # seconds
 TASK_TIMEOUT = 55       # seconds
 
 # ============================
-# Master Logic
+# Main
 # ============================
 def main():
     logger.info("[Master] Starting")
@@ -58,13 +59,13 @@ def main():
     while urls_to_crawl_queue or assigned_tasks:
         now = datetime.now()
 
-        # Assign new crawl tasks
+        # =========== Assign New Crawl Tasks ===========
         while urls_to_crawl_queue:
             url, depth = urls_to_crawl_queue.pop(0)
             if url in crawled_urls_set:
                 continue
 
-            task_id = str(uuid4())
+            task_id = str(uuid4()) # Generate a unique task ID
             payload = {
                 "url": url,
                 "depth": depth,
@@ -75,7 +76,7 @@ def main():
             logger.info(f"[Assigned] {url} at depth {depth} → Task ID {task_id}")
             time.sleep(CRAWL_DELAY)
 
-        # Receive heartbeats from SQS
+        # ============ Receive Heartbeats from SQS ============
         for msg in receive_messages_sqs(HEARTBEAT_QUEUE_URL, max_messages=10):
             payload = msg.get("payload", {})
             worker_id = payload.get("worker_id")
@@ -86,8 +87,10 @@ def main():
 
             delete_parsed_message_sqs(HEARTBEAT_QUEUE_URL, msg)
 
-        # Receive crawl results
+        # =============== Receive Crawl Results ===============
         for msg in receive_messages_sqs(RESULT_QUEUE_URL, max_messages=5):
+            
+            # Extract the payload from the message
             payload = msg.get("payload", {})
             task_id = payload.get("task_id")
             url = payload.get("url")
@@ -108,14 +111,14 @@ def main():
             logger.info(f"[Result] {url} → {len(new_urls)} new URLs")
             delete_parsed_message_sqs(RESULT_QUEUE_URL, msg)
 
-        # Check task timeouts
+        # =============== Check Task Timeout ===============
         for task_id, (url, depth, assigned_time) in list(assigned_tasks.items()):
             if (now - assigned_time).total_seconds() > TASK_TIMEOUT:
                 logger.warning(f"[Timeout] Re-queueing task {url}")
                 urls_to_crawl_queue.append((url, depth))
                 assigned_tasks.pop(task_id)
 
-        # Detect dead workers
+        # =============== Detect Dead Workers ===============
         for worker_id, last_seen in list(last_heartbeat.items()):
             if (now - last_seen).total_seconds() > HEARTBEAT_TIMEOUT:
                 logger.warning(f"[Missed] No heartbeat from {worker_id} in {HEARTBEAT_TIMEOUT} sec")

@@ -1,4 +1,6 @@
-# === sqs_config.py (updated) ===
+# ===============================
+# Import Libraries
+# ===============================
 import boto3
 import json
 import hashlib
@@ -19,9 +21,9 @@ s3 = boto3.client('s3', region_name=AWS_REGION,
                   aws_access_key_id=AWS_ACCESS_KEY,
                   aws_secret_access_key=AWS_SECRET_KEY)
 
-# ===============================
-# Hardcoded Queue URLs and S3
-# ===============================
+# ============================================
+# Hardcoded Queue, S3, and Web Interface URLs
+# ============================================
 DASHBOARD_HOST = "http://192.168.1.12:5000"
 
 CRAWL_QUEUE_URL = 'https://sqs.eu-north-1.amazonaws.com/452876378545/CrawlQueue.fifo'
@@ -33,6 +35,8 @@ S3_BUCKET_NAME = 'ahmed-crawler-bucket'
 # ===============================
 # SQS Helper Functions
 # ===============================
+
+# Function to send a message to SQS
 def send_message_sqs(queue_url, message_type, payload, group_id="default"):
     message_body = {"type": message_type, "payload": payload}
     message = {"QueueUrl": queue_url, "MessageBody": json.dumps(message_body)}
@@ -41,6 +45,7 @@ def send_message_sqs(queue_url, message_type, payload, group_id="default"):
     response = sqs.send_message(**message)
     return response
 
+# Function to receive messages from SQS
 def receive_messages_sqs(queue_url, max_messages=10, wait_time=5):
     response = sqs.receive_message(QueueUrl=queue_url, MaxNumberOfMessages=max_messages, WaitTimeSeconds=wait_time)
     messages = response.get('Messages', [])
@@ -51,6 +56,7 @@ def receive_messages_sqs(queue_url, max_messages=10, wait_time=5):
         parsed_messages.append(parsed_message)
     return parsed_messages
 
+# Function to delete a message from SQS
 def delete_parsed_message_sqs(queue_url, parsed_message):
     receipt_handle = parsed_message.get("receipt_handle")
     if receipt_handle:
@@ -59,6 +65,8 @@ def delete_parsed_message_sqs(queue_url, parsed_message):
 # ===============================
 # S3 Helper Functions
 # ===============================
+
+# Function to upload content to S3
 def upload_to_s3(content, key, metadata=None):
     response = s3.put_object(
         Bucket=S3_BUCKET_NAME,
@@ -68,10 +76,12 @@ def upload_to_s3(content, key, metadata=None):
     )
     return response
 
+# Function to map a URL to an S3 key
 def url_to_s3_key(url):
     hashed = hashlib.md5(url.encode()).hexdigest()
     return f"{hashed}.html"
 
+# Function to download content from S3
 def download_from_s3(key):
     obj = s3.get_object(Bucket=S3_BUCKET_NAME, Key=key)
     body = obj['Body'].read().decode('utf-8')

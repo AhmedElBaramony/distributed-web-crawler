@@ -1,14 +1,25 @@
-# dashboard_logger.py
+# ===============================
+# Import Libraries
+# ===============================
 import requests
 import urllib.parse
 import threading
 import time
 import logging
 
+# ============================
+# Constants
+# ============================
+
 DASHBOARD_HOST = "http://192.168.1.12:5000"
 LOG_ENDPOINT = "/api/logs/{node}"
 HEARTBEAT_ENDPOINT = "/api/heartbeat/{node}"
 
+# ============================
+# Helper Functions
+# ============================
+
+# Function to send logs to the dashboard
 def log(node, message):
     def push_line(line):
         try:
@@ -21,6 +32,7 @@ def log(node, message):
     for line in message.splitlines():
         threading.Thread(target=push_line, args=(line,), daemon=True).start()
 
+# Function to send heartbeat to the dashboard
 def start_heartbeat(node, interval=5):
     def beat():
         while True:
@@ -32,6 +44,9 @@ def start_heartbeat(node, interval=5):
     thread = threading.Thread(target=beat, daemon=True)
     thread.start()
 
+# ============================
+# Logging Configuration
+# ============================
 class DashboardLogHandler(logging.Handler):
     def __init__(self, node):
         super().__init__()
